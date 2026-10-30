@@ -2062,6 +2062,138 @@ process.on("SIGINT", () => {
   addLog("[System] SIGINT received — ignoring, bot will stay alive.");
 });
 
+
+// ============================================================
+// SHUBH JARVIS - DISCORD TEXT CONTROL (STAGE 1)
+// Secrets are read from hosting environment variables, never from source files.
+// Required: DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID, DISCORD_OWNER_ID
+// ============================================================
+let discordClient = null;
+
+async function startJarvisDiscord() {
+  const token = process.env.DISCORD_TOKEN;
+  const clientId = process.env.DISCORD_CLIENT_ID;
+  const guildId = process.env.DISCORD_GUILD_ID;
+  const ownerId = process.env.DISCORD_OWNER_ID;
+
+  if (!token || !clientId || !guildId || !ownerId) {
+    addLog("[JARVIS/Discord] Not started: set all four Discord environment variables.");
+    return;
+  }
+
+  try {
+    const {
+      Client,
+      GatewayIntentBits,
+      REST,
+      Routes,
+      SlashCommandBuilder,
+      MessageFlags,
+    } = require("discord.js");
+
+    const commands = [
+      new SlashCommandBuilder()
+        .setName("status")
+        .setDescription("Show SHUBH JARVIS Minecraft connection status"),
+      new SlashCommandBuilder()
+        .setName("say")
+        .setDescription("Send a normal chat message through the Minecraft bot")
+        .addStringOption(option =>
+          option.setName("message")
+            .setDescription("Message to send in Minecraft chat")
+            .setRequired(true)
+            .setMaxLength(180)
+        ),
+      new SlashCommandBuilder()
+        .setName("jarvis-help")
+        .setDescription("Show available SHUBH JARVIS commands"),
+    ].map(command => command.toJSON());
+
+    const rest = new REST({ version: "10" }).setToken(token);
+    await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
+
+    discordClient = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+    discordClient.once("ready", () => {
+      addLog(`[JARVIS/Discord] Logged in as ${discordClient.user.tag}`);
+    });
+
+    discordClient.on("interactionCreate", async interaction => {
+      if (!interaction.isChatInputCommand()) return;
+
+      // Stage 1 is owner-only. Per-player permissions/sessions come later.
+      if (interaction.user.id !== ownerId) {
+        await interaction.reply({
+          content: "⛔ SHUBH JARVIS: This command is currently owner-only.",
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      if (interaction.commandName === "status") {
+        const online = Boolean(bot && botState.connected && bot.entity);
+        const position = online
+          ? `X ${Math.floor(bot.entity.position.x)}, Y ${Math.floor(bot.entity.position.y)}, Z ${Math.floor(bot.entity.position.z)}`
+          : "Unavailable";
+        await interaction.reply({
+          content: [
+            "**SHUBH JARVIS — Minecraft Status**",
+            `Connection: ${online ? "🟢 Connected" : "🔴 Disconnected"}`,
+            `Server: ${config.server.ip}:${config.server.port}`,
+            `Minecraft bot: ${config["bot-account"].username}`,
+            `Position: ${position}`
+          ].join("\n"),
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      if (interaction.commandName === "say") {
+        const message = interaction.options.getString("message", true).trim();
+        if (!bot || !botState.connected || !bot.entity) {
+          await interaction.reply({
+            content: "Minecraft bot is not connected right now.",
+            flags: MessageFlags.Ephemeral
+          });
+          return;
+        }
+        // Prevent accidental command execution from Discord in this first milestone.
+        if (message.startsWith("/")) {
+          await interaction.reply({
+            content: "For safety, /say only sends normal chat text, not Minecraft slash-commands.",
+            flags: MessageFlags.Ephemeral
+          });
+          return;
+        }
+        bot.chat(message);
+        addLog(`[JARVIS/Discord] Owner sent Minecraft chat (${message.length} chars).`);
+        await interaction.reply({
+          content: "✅ Message sent to Minecraft chat.",
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      if (interaction.commandName === "jarvis-help") {
+        await interaction.reply({
+          content: [
+            "**SHUBH JARVIS — Stage 1 commands**",
+            "`/status` — Minecraft bot connection and position",
+            "`/say message:` — send normal chat text in Minecraft",
+            "",
+            "Building, crafting, mining, follow, and personal NPC sessions are not enabled yet."
+          ].join("\n"),
+          flags: MessageFlags.Ephemeral
+        });
+      }
+    });
+
+    await discordClient.login(token);
+  } catch (error) {
+    addLog(`[JARVIS/Discord] Startup error: ${error.message}`);
+  }
+}
+
 // =============================
 //===============================
 // START THE BOT
@@ -2076,4 +2208,5 @@ addLog(
 );
 addLog("=".repeat(50));
 
+startJarvisDiscord();
 createBot();
